@@ -16,11 +16,11 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QStackedWidget,
     QTableWidget,
+    QTableWidgetItem,
     QTabWidget,
     QToolBar,
     QVBoxLayout,
     QWidget,
-    QTableWidgetItem,
 )
 
 from GraphicsView import GraphicsView
@@ -28,7 +28,7 @@ from GraphicsView import GraphicsView
 HOME = os.getenv("HOME")
 
 
-class View(QStackedWidget):
+class View(QWidget):
     hduListInsertRequested = pyqtSignal(fits.HDUList)
 
     def __init__(self, filePath: str):
@@ -37,19 +37,63 @@ class View(QStackedWidget):
         self._filePath: str = filePath
         self._gview: GraphicsView = GraphicsView()
         self._table: QTableWidget = QTableWidget()
+        self._empty_widget = QWidget()
+        self._toolbar = QToolBar()
+        layout = QVBoxLayout()
+        self._stackWidget = QStackedWidget()
 
-        self._hdul: fits.HDUList = fits.open(self._filePath)
+        self.setLayout(layout)
+        layout.addWidget(self._toolbar)
+        layout.addWidget(self._stackWidget)
 
-        self._current_hdu_index: int = -1
+        try:
+            self._hdul: fits.HDUList = fits.open(self._filePath)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open FITS file: \n{str(e)}")
+            return
+
         self._num_hdus = len(self._hdul)
+        self._current_hdu_index: int = 0
 
         if len(self._hdul) != 0:
             self.hduListInsertRequested.emit(self._hdul)
 
         self.setContentsMargins(0, 0, 0, 0)
-        self.addWidget(self._gview)
-        self.addWidget(self._table)
+        self._stackWidget.addWidget(self._empty_widget)
+        self._stackWidget.addWidget(self._gview)
+        self._stackWidget.addWidget(self._table)
+        self._initToolbar()
+        self._populateHDUListCombo()
+
+        self._stackWidget.setCurrentWidget(self._gview)
+
         self.show()
+
+    def _initToolbar(self):
+        self._hdulist_combo = QComboBox()
+        self._hdulist_combo.currentIndexChanged.connect(
+            self._onHDUCombolistIndexChanged
+        )
+
+        self._toolbar.addWidget(QLabel("HDU"))
+        self._toolbar.addWidget(self._hdulist_combo)
+
+
+    def _onHDUCombolistIndexChanged(self, index: int) -> None:
+        self.loadHDU(index)
+
+    def _populateHDUListCombo(self) -> None:
+        for i, hdu in enumerate(self._hdul):
+            # print(f"HDU {i}:")
+            # print(f"  Type: {type(hdu).__name__}")
+            # print(f"  Name: {hdu.name}")
+            # print(f"  Shape: {getattr(hdu.data, 'shape', None)}")
+            # print(f"  Data type: {getattr(hdu.data, 'dtype', None)}")
+            self._hdulist_combo.addItem(hdu.name)
+
+    @property
+    def currentHDUIndex(self) -> int:
+        return self._current_hdu_index
 
     @property
     def hdul(self) -> fits.HDUList:
@@ -59,15 +103,17 @@ class View(QStackedWidget):
         if index == self._current_hdu_index:
             return
 
-        if index < 0 or index >= self._num_hdus:
-            QMessageBox.critical(self, "Load HDU", "HDU index out of range!")
+        self._current_hdu_index = index
+
+        if self._num_hdus == 0:
+            self._stackWidget.setCurrentWidget(self._empty_widget)
             return
 
         hdu = self._hdul[index]
         data = hdu.data
 
         if data is None:
-            QMessageBox.critical(self, "Load HDU", "HDU index out of range!")
+            self._stackWidget.setCurrentWidget(self._empty_widget)
             return
 
         if isinstance(hdu, (fits.TableHDU, fits.BinTableHDU)):
@@ -76,8 +122,6 @@ class View(QStackedWidget):
             self._loadPixmap(data)
         else:
             QMessageBox.warning(self, "Unsupported HDU", "Cannot display this HDU.")
-
-        self._current_hdu_index = index
 
     def _loadTable(self, data: fits.TableHDU) -> None:
         col_names = data.names
@@ -88,7 +132,7 @@ class View(QStackedWidget):
         self._table.setRowCount(n_rows)
         self._table.setHorizontalHeaderLabels(col_names)
 
-        self.setCurrentWidget(self._table)
+        self._stackWidget.setCurrentWidget(self._table)
 
         # Fill table
 
@@ -124,7 +168,13 @@ class View(QStackedWidget):
 
         pix = QPixmap.fromImage(qimg)
         self._gview.setPixmap(pix)
-        self.setCurrentWidget(self._gview)
+        self._stackWidget.setCurrentWidget(self._gview)
+
+    def zoomIn(self) -> None:
+        self._gview._applyZoom(True)
+
+    def zoomOut(self) -> None:
+        self._gview._applyZoom(False)
 
 
 class MainWindow(QMainWindow):
@@ -138,19 +188,19 @@ class MainWindow(QMainWindow):
 
         self._tabWidget = QTabWidget()
         self._tabWidget.currentChanged.connect(self._onTabChanged)
-        self._toolbar = QToolBar()
+        self._tabWidget.tabCloseRequested.connect(self._closeTab)
+        self._tabWidget.setTabsClosable(True)
+        self._tabWidget.setTabBarAutoHide(True)
 
         self.setContentsMargins(0, 0, 0, 0)
         _layout.setContentsMargins(0, 0, 0, 0)
 
-        _layout.addWidget(self._toolbar)
         _layout.addWidget(self._tabWidget)
 
         self._menuBar = self.menuBar()
         self.setMinimumSize(800, 600)
 
         self._initMenu()
-        self._initToolbar()
         self.show()
 
         self._currentView: View = None
@@ -158,19 +208,13 @@ class MainWindow(QMainWindow):
         if len(files) != 0:
             self._openFiles(files)
 
-    def _initToolbar(self):
-        self._hdulist_combo = QComboBox()
-        self._hdulist_combo.currentIndexChanged.connect(
-            self._onHDUCombolistIndexChanged
-        )
-
-        self._toolbar.addWidget(self._hdulist_combo)
-
     def _initMenu(self):
         self._fileMenu = QMenu("File")
         self._editMenu = QMenu("Edit")
+        self._viewMenu = QMenu("View")
         self._helpMenu = QMenu("Help")
 
+        # File Menu
         self._openFileAction = QAction("Open")
         self._exitAction = QAction("Exit")
         self._exitAction.triggered.connect(lambda: QGuiApplication.exit())
@@ -178,32 +222,22 @@ class MainWindow(QMainWindow):
         self._fileMenu.addAction(self._openFileAction)
         self._fileMenu.addAction(self._exitAction)
 
+        # View Menu
+        self._zoomInAction = self._viewMenu.addAction("Zoom In")
+        self._zoomOutAction = self._viewMenu.addAction("Zoom Out")
+
+        self._zoomInAction.triggered.connect(self._zoomIn)
+        self._zoomOutAction.triggered.connect(self._zoomOut)
+        self._viewMenu.addSeparator()
+
         self._menuBar.addMenu(self._fileMenu)
         self._menuBar.addMenu(self._editMenu)
+        self._menuBar.addMenu(self._viewMenu)
         self._menuBar.addMenu(self._helpMenu)
 
     def _onTabChanged(self, index: int) -> None:
-        if index == -1:
-            self._hdulist_combo.clear()
-            return
-
         self._currentView = self._tabWidget.widget(index)
-
-        if isinstance(self._currentView, View):
-            self._populateHDUListCombo(self._currentView.hdul)
-
-    def _onHDUCombolistIndexChanged(self, index: int) -> None:
         self._currentView.loadHDU(index)
-
-    def _populateHDUListCombo(self, hdul: fits.HDUList) -> None:
-        self._hdulist_combo.clear()
-        for i, hdu in enumerate(hdul):
-            # print(f"HDU {i}:")
-            # print(f"  Type: {type(hdu).__name__}")
-            # print(f"  Name: {hdu.name}")
-            # print(f"  Shape: {getattr(hdu.data, 'shape', None)}")
-            # print(f"  Data type: {getattr(hdu.data, 'dtype', None)}")
-            self._hdulist_combo.addItem(hdu.name)
 
     def _openFiles(self, files: List[str] = []) -> bool:
         """
@@ -221,7 +255,24 @@ class MainWindow(QMainWindow):
             if file.startswith("~"):
                 file = file.replace("~", HOME)
             tab = View(file)
-            tab.hduListInsertRequested.connect(self._populateHDUListCombo)
-            self._tabWidget.addTab(tab, file)
+            basename = os.path.basename(file)
+            self._tabWidget.addTab(tab, basename)
+            self._tabWidget.setCurrentWidget(tab)
+
+        self._currentView = tab
 
         return True
+
+    def _zoomIn(self) -> None:
+        self._currentView.zoomIn()
+
+    def _zoomOut(self) -> None:
+        self._currentView.zoomOut()
+
+    def _closeTab(self, index: int) -> None:
+        widget = self._tabWidget.widget(index)
+        self._tabWidget.removeTab(index)
+        widget.deleteLater()
+        if self._tabWidget.count() == 0:
+            self._hdulist_combo.clear()
+            self._currentView = None
