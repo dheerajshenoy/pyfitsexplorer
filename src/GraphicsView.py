@@ -1,11 +1,12 @@
-from PyQt6.QtWidgets import QGraphicsView, QGraphicsPixmapItem, QGraphicsScene
+from PyQt6.QtWidgets import QGraphicsView, QGraphicsPixmapItem, QGraphicsScene, QWidget
 from PyQt6.QtGui import QPixmap, QWheelEvent, QPainter
 from PyQt6.QtCore import Qt
+from typing import Optional
 
 
 class GraphicsView(QGraphicsView):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent=parent)
 
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)

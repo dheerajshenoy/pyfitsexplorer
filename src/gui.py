@@ -35,7 +35,7 @@ class View(QWidget):
         super().__init__()
 
         self._filePath: str = filePath
-        self._gview: GraphicsView = GraphicsView()
+        self._gview: GraphicsView = GraphicsView(self)
         self._table: QTableWidget = QTableWidget()
         self._empty_widget = QWidget()
         self._toolbar = QToolBar()
@@ -65,8 +65,6 @@ class View(QWidget):
         self._initToolbar()
         self._populateHDUListCombo()
 
-        self._stackWidget.setCurrentWidget(self._gview)
-
         self.show()
 
     def _initToolbar(self):
@@ -77,6 +75,8 @@ class View(QWidget):
 
         self._toolbar.addWidget(QLabel("HDU"))
         self._toolbar.addWidget(self._hdulist_combo)
+
+        self.loadHDU(1)
 
 
     def _onHDUCombolistIndexChanged(self, index: int) -> None:
@@ -171,10 +171,12 @@ class View(QWidget):
         self._stackWidget.setCurrentWidget(self._gview)
 
     def zoomIn(self) -> None:
-        self._gview._applyZoom(True)
+        if self._gview:
+            self._gview._applyZoom(True)
 
     def zoomOut(self) -> None:
-        self._gview._applyZoom(False)
+        if self._gview:
+            self._gview._applyZoom(False)
 
 
 class MainWindow(QMainWindow):
@@ -237,7 +239,6 @@ class MainWindow(QMainWindow):
 
     def _onTabChanged(self, index: int) -> None:
         self._currentView = self._tabWidget.widget(index)
-        self._currentView.loadHDU(index)
 
     def _openFiles(self, files: List[str] = []) -> bool:
         """
@@ -257,9 +258,8 @@ class MainWindow(QMainWindow):
             tab = View(file)
             basename = os.path.basename(file)
             self._tabWidget.addTab(tab, basename)
-            self._tabWidget.setCurrentWidget(tab)
 
-        self._currentView = tab
+        self._tabWidget.setCurrentWidget(tab)
 
         return True
 
