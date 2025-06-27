@@ -310,11 +310,44 @@ class MainWindow(QMainWindow):
         return False
 
     def _exportImage(self) -> bool:
-        exportFileName, _ = QFileDialog.getSaveFileName(self, "Save As")
-        if exportFileName == "":
-            return
+        if not self._currentView:
+            QMessageBox.warning(self, "No Image", "No image view is currently active.")
+            return False
 
         pix = self._currentView.getPixmap()
+        if pix is None or pix.isNull():
+            QMessageBox.warning(
+                self, "No Image", "The current view does not contain a valid image."
+            )
+            return False
+
+        exportFileName, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Image As",
+            "",
+            "PNG Files (*.png);;JPEG Files (*.jpg *.jpeg);;BMP Files (*.bmp);;TIFF Files (*.tiff *.tif);;All Files (*)",
+        )
+
+        if not exportFileName:
+            return False
+
+        # Infer format from file extension
+        ext = exportFileName.split('.')[-1].lower()
+        if ext not in {"png", "jpg", "jpeg", "bmp", "tiff", "tif"}:
+            QMessageBox.warning(self, "Invalid Format", "Unsupported image format.")
+            return False
+
+        try:
+            success = pix.save(exportFileName, ext.upper())
+            if success:
+                QMessageBox.information(self, "Export Successful", f"Image saved to:\n{exportFileName}")
+                return True
+            else:
+                raise IOError("Pixmap save failed")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", f"Could not save image:\n{str(e)}")
+            return False
 
     def _exportTable(self) -> bool:
         if not self._currentView:
