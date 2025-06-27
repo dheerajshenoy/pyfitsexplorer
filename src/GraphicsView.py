@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QGraphicsView, QGraphicsPixmapItem, QGraphicsScene, QWidget
-from PyQt6.QtGui import QPixmap, QWheelEvent, QPainter
+from PyQt6.QtGui import QPixmap, QWheelEvent, QPainter, QCursor
 from PyQt6.QtCore import Qt
 from typing import Optional
 
@@ -31,11 +31,11 @@ class GraphicsView(QGraphicsView):
         # Zoom with Ctrl+Scroll
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             zoom_in = event.angleDelta().y() > 0
-            self._applyZoom(zoom_in)
+            self.applyZoom(zoom_in)
         else:
             super().wheelEvent(event)
 
-    def _applyZoom(self, zoom_in: bool) -> None:
+    def applyZoom(self, zoom_in: bool) -> None:
         factor = 1.25 if zoom_in else 0.8
         if zoom_in:
             self._zoom += 1
@@ -43,6 +43,16 @@ class GraphicsView(QGraphicsView):
         elif not zoom_in and self._zoom > -10:
             self._zoom -= 1
             self.scale(factor, factor)
+
+    def rotateClock(self) -> None:
+        center = self.pix_item.boundingRect().center()
+        self.pix_item.setTransformOriginPoint(center)
+        self.pix_item.setRotation(self.pix_item.rotation() + 90)
+
+    def rotateAnticlock(self) -> None:
+        center = self.pix_item.boundingRect().center()
+        self.pix_item.setTransformOriginPoint(center)
+        self.pix_item.setRotation(self.pix_item.rotation() - 90)
 
     def resetZoom(self) -> None:
         self.resetTransform()

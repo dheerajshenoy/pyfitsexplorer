@@ -5,7 +5,14 @@ from typing import List
 import numpy as np
 from astropy.io import fits
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtGui import QAction, QGuiApplication, QImage, QPixmap
+from PyQt6.QtGui import (
+    QAction,
+    QGuiApplication,
+    QImage,
+    QKeySequence,
+    QPixmap,
+    QShortcut,
+)
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -22,12 +29,35 @@ from PyQt6.QtWidgets import (
     QToolBar,
     QVBoxLayout,
     QWidget,
+    QDialog
 )
+
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 
 from GraphicsView import GraphicsView
 
 HOME = os.getenv("HOME")
 
+
+class HistogramWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.canvas = FigureCanvas(Figure())
+        layout = QVBoxLayout()
+        layout.addWidget(self.canvas)
+        self.setLayout(layout)
+
+        self.ax = self.canvas.figure.add_subplot(111)
+
+    def plotHistogram(self, data, bins=256):
+        self.ax.clear()
+        self.ax.hist(data.flatten(), bins=bins, color="gray", edgecolor="black")
+        self.ax.set_title("Pixel Intensity Histogram")
+        self.ax.set_xlabel("Pixel Value")
+        self.ax.set_ylabel("Frequency")
+        self.canvas.draw()
 
 class HDUType(Enum):
     NONE = (0,)
@@ -102,6 +132,10 @@ class View(QWidget):
         Returns currently loaded pixmap (if any)
         """
         return self._gview.pix_item.pixmap()
+
+    def getImageData(self) -> np.ndarray:
+        hdu = self._hdul[self._current_hdu_index]
+        return np.nan_to_num(hdu.data)
 
     def getTable(self) -> np.ndarray:
         """
@@ -218,11 +252,23 @@ class View(QWidget):
 
     def zoomIn(self) -> None:
         if self._gview:
-            self._gview._applyZoom(True)
+            self._gview.applyZoom(True)
 
     def zoomOut(self) -> None:
         if self._gview:
-            self._gview._applyZoom(False)
+            self._gview.applyZoom(False)
+
+    def zoomReset(self) -> None:
+        if self._gview:
+            self._gview.resetZoom()
+
+    def rotateClock(self) -> None:
+        if self._gview:
+            self._gview.rotateClock()
+
+    def rotateAnticlock(self) -> None:
+        if self._gview:
+            self._gview.rotateAnticlock()
 
 
 class MainWindow(QMainWindow):
@@ -252,12 +298,46 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(800, 600)
 
         self._initMenu()
+        self._initCommandMap()
+        self._initKeybinds()
         self.show()
 
         self._currentView: View = None
 
         if len(files) != 0:
             self._openFiles(files)
+
+    def _initCommandMap(self) -> None:
+        """
+        Initialize the command map for use with shortcuts
+        """
+
+        self._command_map = {
+            "open_file": lambda: self._openFiles(),
+            "exit": QGuiApplication.exit,
+            "zoom_in": self._zoomIn,
+            "zoom_out": self._zoomOut,
+            "zoom_reset": self._zoomReset,
+            "rotate_clock": self._rotateClock,
+            "rotate_anticlock": self._rotateAnticlock,
+        }
+
+    def _initKeybinds(self) -> None:
+        """
+        Initialize the default keybindings
+        """
+        self._shortcuts_map = {
+            "o": "open_file",
+            "=": "zoom_in",
+            "-": "zoom_out",
+            "0": "zoom_reset",
+            ",": "rotate_anticlock",
+            ".": "rotate_clock",
+        }
+
+        for key, action in self._shortcuts_map.items():
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.activated.connect(self._command_map[action])
 
     def _initMenu(self):
         self._fileMenu = QMenu("File")
@@ -275,8 +355,10 @@ class MainWindow(QMainWindow):
 
         # Edit Menu
         self._exportAction = self._editMenu.addAction("Export")
+        self._histogramAction = self._editMenu.addAction("Histogram")
 
         self._exportAction.triggered.connect(self._export)
+        self._histogramAction.triggered.connect(self._histogram)
 
         # View Menu
         self._zoomInAction = self._viewMenu.addAction("Zoom In")
@@ -332,7 +414,7 @@ class MainWindow(QMainWindow):
             return False
 
         # Infer format from file extension
-        ext = exportFileName.split('.')[-1].lower()
+        ext = exportFileName.split(".")[-1].lower()
         if ext not in {"png", "jpg", "jpeg", "bmp", "tiff", "tif"}:
             QMessageBox.warning(self, "Invalid Format", "Unsupported image format.")
             return False
@@ -340,13 +422,17 @@ class MainWindow(QMainWindow):
         try:
             success = pix.save(exportFileName, ext.upper())
             if success:
-                QMessageBox.information(self, "Export Successful", f"Image saved to:\n{exportFileName}")
+                QMessageBox.information(
+                    self, "Export Successful", f"Image saved to:\n{exportFileName}"
+                )
                 return True
             else:
                 raise IOError("Pixmap save failed")
 
         except Exception as e:
-            QMessageBox.critical(self, "Export Failed", f"Could not save image:\n{str(e)}")
+            QMessageBox.critical(
+                self, "Export Failed", f"Could not save image:\n{str(e)}"
+            )
             return False
 
     def _exportTable(self) -> bool:
@@ -508,6 +594,15 @@ class MainWindow(QMainWindow):
     def _zoomOut(self) -> None:
         self._currentView.zoomOut()
 
+    def _zoomReset(self) -> None:
+        self._currentView.zoomReset()
+
+    def _rotateClock(self) -> None:
+        self._currentView.rotateClock()
+
+    def _rotateAnticlock(self) -> None:
+        self._currentView.rotateAnticlock()
+
     def _closeTab(self, index: int) -> None:
         widget = self._tabWidget.widget(index)
         self._tabWidget.removeTab(index)
@@ -515,3 +610,25 @@ class MainWindow(QMainWindow):
         if self._tabWidget.count() == 0:
             self._hdulist_combo.clear()
             self._currentView = None
+
+    def _histogram(self) -> None:
+        if self._current_hdu_type != HDUType.IMAGE:
+            return
+
+        data: np.ndarray = self._currentView.getImageData()
+        print(data)
+
+        if data is None:
+            QMessageBox.critical(self, "Histogram", "No image data found!")
+            return
+
+        hist_dialog = QDialog(self)
+        hist_dialog.setWindowTitle("Histogram")
+        hist_widget = HistogramWidget()
+        hist_widget.plotHistogram(data)
+
+        layout = QVBoxLayout()
+        layout.addWidget(hist_widget)
+        hist_dialog.setLayout(layout)
+        hist_dialog.resize(600, 400)
+        hist_dialog.exec()
