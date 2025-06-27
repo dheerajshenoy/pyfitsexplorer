@@ -328,7 +328,10 @@ class MainWindow(QMainWindow):
             return False
 
         exportFileName, selectedFilter = QFileDialog.getSaveFileName(
-            self, "Save As", "", "CSV Files (*.csv);;TSV Files (*.tsv);;LaTeX Files (*.tex)"
+            self,
+            "Save As",
+            "",
+            "CSV Files (*.csv);;TSV Files (*.tsv);;LaTeX Files (*.tex)",
         )
 
         if exportFileName == "":
@@ -343,51 +346,52 @@ class MainWindow(QMainWindow):
             _format = "csv"
             sep = ","
 
-        # try:
-        with open(exportFileName, "w", encoding="utf-8") as f:
-            if _format == "tex":
-                f.write("\\begin{tabular}{" + " | ".join(["l"] * table.ncols) + "}\n")
-                f.write("\\hline\n")
+        try:
+            with open(exportFileName, "w", encoding="utf-8") as f:
+                if _format == "tex":
+                    f.write(
+                        "\\begin{tabular}{" + " | ".join(["l"] * table.ncols) + "}\n"
+                    )
+                    f.write("\\hline\n")
 
-                # Header
-                header = " & ".join(self._escape_latex(s) for s in table.col_names)
-                f.write(f"{header} \\\\\n\\hline\n")
+                    # Header
+                    header = " & ".join(self._escape_latex(s) for s in table.col_names)
+                    f.write(f"{header} \\\\\n\\hline\n")
 
-                # Rows
-                for row in range(table.nrows):
-                    row_data = []
-                    for col in table.col_names:
-                        val = table.data[col][row]
-                        if isinstance(val, bytes):
-                            val = val.decode(errors="ignore")
-                        row_data.append(self._escape_latex(str(val)))
-                    f.write(" & ".join(row_data) + " \\\\\n")
-                f.write("\\hline\n\\end{tabular}\n")
-            else:
-                # Write header
-                f.write(sep.join(table.col_names) + "\n")
+                    # Rows
+                    for row in range(table.nrows):
+                        row_data = []
+                        for col in table.col_names:
+                            val = table.data[col][row]
+                            if isinstance(val, bytes):
+                                val = val.decode(errors="ignore")
+                            row_data.append(self._escape_latex(str(val)))
+                        f.write(" & ".join(row_data) + " \\\\\n")
+                    f.write("\\hline\n\\end{tabular}\n")
+                else:
+                    # Write header
+                    f.write(sep.join(table.col_names) + "\n")
 
-                # Write each row
-                for row in range(table.nrows):
-                    row_data = []
-                    for col in table.col_names:
-                        val = table.data[col][row]
-                        # Handle bytes
-                        if isinstance(val, bytes):
-                            val = val.decode(errors="ignore")
-                        row_data.append(str(val))
-                    f.write(sep.join(row_data) + "\n")
+                    # Write each row
+                    for row in range(table.nrows):
+                        row_data = []
+                        for col in table.col_names:
+                            val = table.data[col][row]
+                            # Handle bytes
+                            if isinstance(val, bytes):
+                                val = val.decode(errors="ignore")
+                            row_data.append(str(val))
+                        f.write(sep.join(row_data) + "\n")
 
-        QMessageBox.information(
-            self, "Export Successful", f"Table exported to:\n{exportFileName}"
-        )
-        return True
-
-        # except Exception as e:
-        #     QMessageBox.critical(
-        #         self, "Export Failed", f"Failed to export table:\n{str(e)}"
-        #     )
-        #     return False
+            QMessageBox.information(
+                self, "Export Successful", f"Table exported to:\n{exportFileName}"
+            )
+            return True
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Export Failed", f"Failed to export table:\n{str(e)}"
+            )
+            return False
 
     def _escape_latex(self, text: str) -> str:
         """
