@@ -1,3 +1,4 @@
+from enum import Enum
 import os
 from typing import List
 
@@ -28,8 +29,24 @@ from GraphicsView import GraphicsView
 HOME = os.getenv("HOME")
 
 
+class HDUType(Enum):
+    NONE = (0,)
+    EMPTY = (1,)
+    IMAGE = (2,)
+    TABLE = (3,)
+
+
+class TableData:
+    def __init__(self, data: fits.TableHDU):
+        self.col_names = data.names
+        self.nrows = len(data)
+        self.ncols = len(self.col_names)
+        self.data = data
+
+
 class View(QWidget):
     hduListInsertRequested = pyqtSignal(fits.HDUList)
+    HDUTypeChanged = pyqtSignal(HDUType)
 
     def __init__(self, filePath: str):
         super().__init__()
@@ -41,6 +58,8 @@ class View(QWidget):
         self._toolbar = QToolBar()
         layout = QVBoxLayout()
         self._stackWidget = QStackedWidget()
+
+        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
         self.setLayout(layout)
         layout.addWidget(self._toolbar)
@@ -78,6 +97,30 @@ class View(QWidget):
 
         self.loadHDU(1)
 
+    def getPixmap(self) -> QPixmap:
+        """
+        Returns currently loaded pixmap (if any)
+        """
+        return self._gview.pix_item.pixmap()
+
+    def getTable(self) -> np.ndarray:
+        """
+        Returns currently loaded table (if any)
+        """
+        return TableData(self._hdul[self._current_hdu_index].data)
+
+    def currentHDUType(self) -> HDUType:
+        """
+        Get the HDU type for the current HDU index
+        """
+        hdu = self._hdul[self._current_hdu_index]
+        if hdu.data is None:
+            return HDUType.EMPTY
+        if isinstance(hdu, (fits.TableHDU, fits.BinTableHDU)):
+            return HDUType.TABLE
+        if getattr(hdu.data, "ndim", 0) == 2:
+            return HDUType.IMAGE
+        return HDUType.EMPTY
 
     def _onHDUCombolistIndexChanged(self, index: int) -> None:
         self.loadHDU(index)
@@ -107,6 +150,7 @@ class View(QWidget):
 
         if self._num_hdus == 0:
             self._stackWidget.setCurrentWidget(self._empty_widget)
+            self.HDUTypeChanged.emit(HDUType.EMPTY)
             return
 
         hdu = self._hdul[index]
@@ -133,6 +177,7 @@ class View(QWidget):
         self._table.setHorizontalHeaderLabels(col_names)
 
         self._stackWidget.setCurrentWidget(self._table)
+        self.HDUTypeChanged.emit(HDUType.TABLE)
 
         # Fill table
 
@@ -169,6 +214,7 @@ class View(QWidget):
         pix = QPixmap.fromImage(qimg)
         self._gview.setPixmap(pix)
         self._stackWidget.setCurrentWidget(self._gview)
+        self.HDUTypeChanged.emit(HDUType.IMAGE)
 
     def zoomIn(self) -> None:
         if self._gview:
@@ -188,7 +234,10 @@ class MainWindow(QMainWindow):
         _widget.setLayout(_layout)
         self.setCentralWidget(_widget)
 
+        self._current_hdu_type: HDUType = HDUType.NONE
+
         self._tabWidget = QTabWidget()
+        self._tabWidget.setMovable(True)
         self._tabWidget.currentChanged.connect(self._onTabChanged)
         self._tabWidget.tabCloseRequested.connect(self._closeTab)
         self._tabWidget.setTabsClosable(True)
@@ -224,6 +273,11 @@ class MainWindow(QMainWindow):
         self._fileMenu.addAction(self._openFileAction)
         self._fileMenu.addAction(self._exitAction)
 
+        # Edit Menu
+        self._exportAction = self._editMenu.addAction("Export")
+
+        self._exportAction.triggered.connect(self._export)
+
         # View Menu
         self._zoomInAction = self._viewMenu.addAction("Zoom In")
         self._zoomOutAction = self._viewMenu.addAction("Zoom Out")
@@ -237,8 +291,127 @@ class MainWindow(QMainWindow):
         self._menuBar.addMenu(self._viewMenu)
         self._menuBar.addMenu(self._helpMenu)
 
+    def _export(self) -> bool:
+        """
+        Export function
+        """
+
+        match self._current_hdu_type:
+            case HDUType.NONE | HDUType.EMPTY:
+                QMessageBox.critical(self, "Export", "Nothing to export here")
+                return False
+
+            case HDUType.IMAGE:
+                return self._exportImage()
+
+            case HDUType.TABLE:
+                return self._exportTable()
+
+        return False
+
+    def _exportImage(self) -> bool:
+        exportFileName, _ = QFileDialog.getSaveFileName(self, "Save As")
+        if exportFileName == "":
+            return
+
+        pix = self._currentView.getPixmap()
+
+    def _exportTable(self) -> bool:
+        if not self._currentView:
+            QMessageBox.warning(self, "No Table", "No table is currently selected.")
+            return False
+
+        table: TableData = self._currentView.getTable()
+
+        if table is None or table.nrows == 0:
+            QMessageBox.warning(self, "Empty Table", "The current table is empty.")
+            return False
+
+        exportFileName, selectedFilter = QFileDialog.getSaveFileName(
+            self, "Save As", "", "CSV Files (*.csv);;TSV Files (*.tsv);;LaTeX Files (*.tex)"
+        )
+
+        if exportFileName == "":
+            return False
+
+        if "TSV" in selectedFilter or exportFileName.endswith(".tsv"):
+            _format = "tsv"
+            sep = "\t"
+        elif "LaTeX" in selectedFilter or exportFileName.endswith(".tex"):
+            _format = "tex"
+        else:
+            _format = "csv"
+            sep = ","
+
+        # try:
+        with open(exportFileName, "w", encoding="utf-8") as f:
+            if _format == "tex":
+                f.write("\\begin{tabular}{" + " | ".join(["l"] * table.ncols) + "}\n")
+                f.write("\\hline\n")
+
+                # Header
+                header = " & ".join(self._escape_latex(s) for s in table.col_names)
+                f.write(f"{header} \\\\\n\\hline\n")
+
+                # Rows
+                for row in range(table.nrows):
+                    row_data = []
+                    for col in table.col_names:
+                        val = table.data[col][row]
+                        if isinstance(val, bytes):
+                            val = val.decode(errors="ignore")
+                        row_data.append(self._escape_latex(str(val)))
+                    f.write(" & ".join(row_data) + " \\\\\n")
+                f.write("\\hline\n\\end{tabular}\n")
+            else:
+                # Write header
+                f.write(sep.join(table.col_names) + "\n")
+
+                # Write each row
+                for row in range(table.nrows):
+                    row_data = []
+                    for col in table.col_names:
+                        val = table.data[col][row]
+                        # Handle bytes
+                        if isinstance(val, bytes):
+                            val = val.decode(errors="ignore")
+                        row_data.append(str(val))
+                    f.write(sep.join(row_data) + "\n")
+
+        QMessageBox.information(
+            self, "Export Successful", f"Table exported to:\n{exportFileName}"
+        )
+        return True
+
+        # except Exception as e:
+        #     QMessageBox.critical(
+        #         self, "Export Failed", f"Failed to export table:\n{str(e)}"
+        #     )
+        #     return False
+
+    def _escape_latex(self, text: str) -> str:
+        """
+        Escape LaTeX special characters
+        """
+        replacements = {
+            "&": "\\&",
+            "%": "\\%",
+            "$": "\\$",
+            "#": "\\#",
+            "_": "\\_",
+            "{": "\\{",
+            "}": "\\}",
+            "~": "\\textasciitilde{}",
+            "^": "\\textasciicircum{}",
+            "\\": "\\textbackslash{}",
+        }
+        for char, escape in replacements.items():
+            text = text.replace(char, escape)
+        return text
+
     def _onTabChanged(self, index: int) -> None:
         self._currentView = self._tabWidget.widget(index)
+        self.handleHDUTypeChanged(self._currentView.currentHDUType())
 
     def _openFiles(self, files: List[str] = []) -> bool:
         """
@@ -256,12 +429,41 @@ class MainWindow(QMainWindow):
             if file.startswith("~"):
                 file = file.replace("~", HOME)
             tab = View(file)
+            tab.HDUTypeChanged.connect(self.handleHDUTypeChanged)
             basename = os.path.basename(file)
             self._tabWidget.addTab(tab, basename)
 
         self._tabWidget.setCurrentWidget(tab)
 
         return True
+
+    def handleHDUTypeChanged(self, type: HDUType) -> None:
+        """
+        Handle HDU type changed. This is used to update menu items depending on whether the HDU
+        is image or table or something else.
+        """
+
+        self._current_hdu_type = type
+
+        match type:
+            case HDUType.IMAGE:
+                self.showTableActions(False)
+                self.showImageActions(True)
+
+            case HDUType.TABLE:
+                self.showTableActions(True)
+                self.showImageActions(False)
+
+            case HDUType.EMPTY | HDUType.NONE:
+                self.showImageActions(False)
+                self.showTableActions(False)
+
+    def showImageActions(self, state: bool) -> None:
+        self._zoomInAction.setVisible(state)
+        self._zoomOutAction.setVisible(state)
+
+    def showTableActions(self, state: bool) -> None:
+        pass
 
     def _zoomIn(self) -> None:
         self._currentView.zoomIn()
