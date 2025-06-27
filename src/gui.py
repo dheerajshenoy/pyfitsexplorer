@@ -616,7 +616,6 @@ class MainWindow(QMainWindow):
             return
 
         data: np.ndarray = self._currentView.getImageData()
-        print(data)
 
         if data is None:
             QMessageBox.critical(self, "Histogram", "No image data found!")
